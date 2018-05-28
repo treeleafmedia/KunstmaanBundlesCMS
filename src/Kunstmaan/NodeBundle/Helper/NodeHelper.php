@@ -3,6 +3,7 @@
 namespace Kunstmaan\NodeBundle\Helper;
 
 use Doctrine\ORM\EntityManagerInterface;
+use Kunstmaan\AdminBundle\Entity\User;
 use Kunstmaan\AdminBundle\Helper\CloneHelper;
 use Kunstmaan\AdminBundle\Helper\FormWidgets\Tabs\TabPane;
 use Kunstmaan\NodeBundle\Entity\HasNodeInterface;
@@ -15,6 +16,7 @@ use Kunstmaan\NodeBundle\Helper\NodeAdmin\NodeAdminPublisher;
 use Kunstmaan\NodeBundle\Helper\NodeAdmin\NodeVersionLockHelper;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
+use Symfony\Component\Security\Core\Exception\AccessDeniedException;
 
 /**
  * Class NodeHelper
@@ -45,11 +47,11 @@ class NodeHelper
     /**
      * NodeHelper constructor.
      *
-     * @param EntityManagerInterface   $em
-     * @param NodeAdminPublisher       $nodeAdminPublisher
-     * @param NodeVersionLockHelper    $nodeVersionLockHelper
-     * @param TokenStorageInterface    $tokenStorage
-     * @param CloneHelper              $cloneHelper
+     * @param EntityManagerInterface $em
+     * @param NodeAdminPublisher $nodeAdminPublisher
+     * @param NodeVersionLockHelper $nodeVersionLockHelper
+     * @param TokenStorageInterface $tokenStorage
+     * @param CloneHelper $cloneHelper
      * @param EventDispatcherInterface $eventDispatcher
      * @param                          $parameters
      */
@@ -73,13 +75,17 @@ class NodeHelper
 
     /**
      * @param NodeTranslation $nodeTranslation
-     * @param NodeVersion     $nodeVersion
+     * @param NodeVersion $nodeVersion
      *
      * @return array
      */
     public function createNodeVersion(NodeTranslation $nodeTranslation, NodeVersion $nodeVersion)
     {
-        $user = $this->em->getRepository('KunstmaanAdminBundle:User')->find(2);
+
+        $user = $this->getAdminUser();
+        if (!$user) {
+            throw new AccessDeniedException('Access denied: User should be an admin user');
+        }
         $nodeVersionIsLocked = $this->nodeVersionLockHelper->isNodeVersionLocked($user, $nodeTranslation, true);
 
         //Check the version timeout and make a new nodeversion if the timeout is passed
@@ -112,15 +118,21 @@ class NodeHelper
     }
 
     /**
-     * @param HasNodeInterface $page            The page
-     * @param NodeTranslation  $nodeTranslation The node translation
-     * @param NodeVersion      $nodeVersion     The node version
+     * @param HasNodeInterface $page The page
+     * @param NodeTranslation $nodeTranslation The node translation
+     * @param NodeVersion $nodeVersion The node version
      *
      * @return NodeVersion
      */
-    public function createDraftVersion(HasNodeInterface $page, NodeTranslation $nodeTranslation, NodeVersion $nodeVersion)
-    {
-        $user = $this->em->getRepository('KunstmaanAdminBundle:User')->find(2);
+    public function createDraftVersion(
+        HasNodeInterface $page,
+        NodeTranslation $nodeTranslation,
+        NodeVersion $nodeVersion
+    ) {
+        $user = $this->getAdminUser();
+        if (!$user) {
+            throw new AccessDeniedException('Access denied: User should be an admin user');
+        }
         $publicPage = $this->cloneHelper
             ->deepCloneAndSave($page);
 
@@ -158,12 +170,12 @@ class NodeHelper
     }
 
     /**
-     * @param Node             $node
-     * @param NodeTranslation  $nodeTranslation
-     * @param NodeVersion      $nodeVersion
+     * @param Node $node
+     * @param NodeTranslation $nodeTranslation
+     * @param NodeVersion $nodeVersion
      * @param HasNodeInterface $page
-     * @param boolean          $isStructureNode
-     * @param TabPane          $tabPane
+     * @param boolean $isStructureNode
+     * @param TabPane $tabPane
      */
     public function updateNode(
         Node $node,
@@ -244,5 +256,61 @@ class NodeHelper
         //                $nodeNewPage, $nodeTranslation, $nodeVersion, $newPage
         //            )
         //        );
+    }
+
+    /**
+     * @param Node $node
+     * @param NodeTranslation $nodeTranslation
+     * @param NodeVersion $nodeVersion
+     * @param HasNodeInterface $page
+     * @param $isStructureNode
+     * @param TabPane $tabPane
+     */
+    public function persistEditNode(
+        Node $node,
+        NodeTranslation $nodeTranslation,
+        NodeVersion $nodeVersion,
+        HasNodeInterface $page,
+        $isStructureNode,
+        TabPane $tabPane
+    ) {
+        $this->eventDispatcher->dispatch(
+            Events::PRE_PERSIST,
+            new NodeEvent($node, $nodeTranslation, $nodeVersion, $page)
+        );
+
+        $nodeTranslation->setTitle($page->getTitle());
+        if ($isStructureNode) {
+            $nodeTranslation->setSlug('');
+        }
+        $nodeVersion->setUpdated(new \DateTime());
+        if ($nodeVersion->getType() == 'public') {
+            $nodeTranslation->setUpdated($nodeVersion->getUpdated());
+        }
+        $this->em->persist($nodeTranslation);
+        $this->em->persist($nodeVersion);
+        $tabPane->persist($this->em);
+        $this->em->flush();
+
+        $this->eventDispatcher->dispatch(
+            Events::POST_PERSIST,
+            new NodeEvent($node, $nodeTranslation, $nodeVersion, $page)
+        );
+    }
+
+    /**
+     * @return mixed|null
+     */
+    private function getAdminUser()
+    {
+        $token = $this->tokenStorage->getToken();
+        if ($token) {
+            $user = $token->getUser();
+            if ($user && $user !== 'anon.' && $user instanceof User) {
+                return $user;
+            }
+        }
+
+        return null;
     }
 }
