@@ -150,7 +150,7 @@ class NodeHelper
         $nodeTranslation->setPublicNodeVersion($publicNodeVersion);
         $nodeVersion->setType('draft');
         $nodeVersion->setOrigin($publicNodeVersion);
-        $nodeVersion->setCreated(new DateTime());
+        $nodeVersion->setCreated(new \DateTime());
 
         $this->em->persist($nodeTranslation);
         $this->em->persist($nodeVersion);
